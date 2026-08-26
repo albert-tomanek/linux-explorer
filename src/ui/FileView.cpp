@@ -928,7 +928,7 @@ void FileView::setCheckBoxesVisible(bool visible)
 
 bool FileView::eventFilter(QObject *watched, QEvent *event)
 {
-    if (!m_checkBoxes || event->type() != QEvent::MouseButtonPress)
+    if (event->type() != QEvent::MouseButtonPress)
         return QWidget::eventFilter(watched, event);
 
     QAbstractItemView *view = currentView();
@@ -936,7 +936,16 @@ bool FileView::eventFilter(QObject *watched, QEvent *event)
         return QWidget::eventFilter(watched, event);
 
     auto *mouse = static_cast<QMouseEvent *>(event);
-    if (mouse->button() != Qt::LeftButton)
+
+    if (mouse->button() == Qt::MiddleButton) {
+        const QModelIndex flat =
+            mapToFlat(view->indexAt(mouse->position().toPoint()), m_model->model());
+        if (flat.isValid())
+            Q_EMIT middleClicked(flat);
+        return true;
+    }
+
+    if (!m_checkBoxes || mouse->button() != Qt::LeftButton)
         return QWidget::eventFilter(watched, event);
 
     const QPoint pos = mouse->position().toPoint();

@@ -232,9 +232,12 @@ private:
             static const QString unknown =
                 QMimeDatabase().mimeTypeForName(QStringLiteral("application/octet-stream")).name();
             if (!item.mimetype().isEmpty() && item.mimetype() != unknown) {
-                const QString suffix = QFileInfo(name).completeSuffix();
-                if (!suffix.isEmpty() && name.length() > suffix.length() + 1)
-                    name.chop(suffix.length() + 1);
+                // QFileInfo::completeSuffix without the QFileInfo, this running
+                // twice per sort comparison
+                const int dot = name.indexOf(QLatin1Char('.'));
+                const int suffix = dot < 0 ? 0 : name.length() - dot - 1;
+                if (suffix > 0 && name.length() > suffix + 1)
+                    name.chop(suffix + 1);
             }
         }
         return name;

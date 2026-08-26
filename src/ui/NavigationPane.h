@@ -2,6 +2,7 @@
 
 #include <QHash>
 #include <QSet>
+#include <QStringList>
 #include <QUrl>
 #include <QWidget>
 
@@ -37,6 +38,7 @@ public:
 
 Q_SIGNALS:
     void urlActivated(const QUrl &url);
+    void newWindowRequested(const QUrl &url);
 
     // From the recycle bin's context menu, the window owning the confirmation
     void emptyTrashRequested();
@@ -55,6 +57,11 @@ protected:
 
 private:
     void rebuild();
+
+    // What the tree is built from, so a data change that moved none of it can
+    // be ignored rather than clearing the tree and rescanning every open branch
+    QStringList placesSignature() const;
+
     QTreeWidgetItem *addGroup(const QString &title,
                               std::initializer_list<const char *> iconNames,
                               const QUrl &url = QUrl());
@@ -83,8 +90,12 @@ private:
     KFilePlacesModel *m_places = nullptr;
     QTreeWidget      *m_tree = nullptr;
 
-    // Watches every expanded folder, so changes made elsewhere show up here
+    // Watches every expanded folder, so changes made elsewhere show up here,
+    // tracked so a rebuild can drop the ones its tree no longer has rows for
     KDirWatch *m_watch = nullptr;
+    QSet<QString> m_watched;
+
+    QStringList m_placesSignature;
 
     // So the highlight survives a rebuild
     QUrl m_currentUrl;

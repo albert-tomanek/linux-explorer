@@ -337,6 +337,8 @@ MainWindow::MainWindow(const QUrl &startUrl, QWidget *parent)
     qApp->installEventFilter(this);
 
     connect(m_places, &NavigationPane::urlActivated, this, &MainWindow::navigateTo);
+    connect(m_places, &NavigationPane::newWindowRequested,
+            this, &MainWindow::openNewWindow);
     connect(m_places, &NavigationPane::emptyTrashRequested, this,
             [this] { FileOps::emptyTrash(this); });
     connect(m_places, &NavigationPane::connectDrivesRequested,
@@ -362,6 +364,7 @@ MainWindow::MainWindow(const QUrl &startUrl, QWidget *parent)
     connect(m_model, &DirectoryModel::loadingStarted, this, [this] {
         m_loading = true;
         m_lastLoadFailed = false;
+        invalidateSelection();
 
         // The page swaps in at once and only the label waits, since leaving the
         // list up means watching the batches trickle in and only then being
@@ -385,6 +388,7 @@ MainWindow::MainWindow(const QUrl &startUrl, QWidget *parent)
     connect(m_model, &DirectoryModel::loadingFinished, this, [this] {
         m_loading = false;
         m_loadingTimer->stop();
+        invalidateSelection();
         // Runs out to full before hiding rather than cutting off partway
         finishPathProgress();
         if (m_stack->currentWidget() == m_loadingPage)
@@ -397,8 +401,10 @@ MainWindow::MainWindow(const QUrl &startUrl, QWidget *parent)
 
     // A folder created through the new menu goes into rename mode once listed,
     // creating one returning before the lister has seen it
-    connect(m_model, &DirectoryModel::itemsAdded, this,
-            [this] { applyPendingSelection(false); });
+    connect(m_model, &DirectoryModel::itemsAdded, this, [this] {
+        invalidateSelection();
+        applyPendingSelection(false);
+    });
 
     // The places model populates asynchronously, so on a cold start the drives
     // land after Computer was summarised and the pane would report none
@@ -409,8 +415,13 @@ MainWindow::MainWindow(const QUrl &startUrl, QWidget *parent)
         updateNotification();
     });
 
-    // The same race, the first trail falling back to a generic drive label
-    const auto refreshTrail = [this] { setCrumbTrail(currentUrl()); };
+    // The same race, the first trail falling back to a generic drive label, and
+    // never while the address bar is being typed into, rebuilding the trail
+    // destroying the editor along with whatever was half typed in it
+    const auto refreshTrail = [this] {
+        if (!m_pathEdit)
+            setCrumbTrail(currentUrl());
+    };
     connect(m_places->placesModel(), &QAbstractItemModel::modelReset, this, refreshTrail);
     connect(m_places->placesModel(), &QAbstractItemModel::rowsInserted, this, refreshTrail);
     connect(m_places->placesModel(), &QAbstractItemModel::rowsRemoved, this, refreshTrail);
@@ -453,6 +464,23 @@ MainWindow::MainWindow(const QUrl &startUrl, QWidget *parent)
     // Not a navigation, opening a window not counting as one
     pushHistory(startUrl);
     showLocation(startUrl);
+}
+
+// The window class a decoration theme matches on is the app id, which Qt reads
+// from the desktop file name as the toplevel is made, and that happens inside
+// this call rather than at construction, so the name is swapped around it and
+// put back for the dialogs
+void MainWindow::setVisible(bool visible)
+{
+    if (!visible) {
+        QMainWindow::setVisible(false);
+        return;
+    }
+
+    const QString dialogs = QGuiApplication::desktopFileName();
+    QGuiApplication::setDesktopFileName(QStringLiteral("explorer"));
+    QMainWindow::setVisible(true);
+    QGuiApplication::setDesktopFileName(dialogs);
 }
 
 MainWindow::~MainWindow()
@@ -500,6 +528,9 @@ void MainWindow::buildActions()
     };
 
     m_actOpen = fileAction(tr("Open"), [this] { openItems(selectedItems()); });
+    m_actOpenNewWindow = fileAction(tr("Open in new window"), [this] {
+        openInNewWindow(selectedItems());
+    });
     m_actOpenWith = fileAction(tr("Open with..."), [this] {
         FileOps::openWith(selectedItems(), this);
     });
@@ -539,6 +570,17 @@ void MainWindow::buildActions()
     }, QKeySequence(Qt::ALT | Qt::Key_Return));
     m_actRestore = fileAction(tr("Restore"), [this] {
         FileOps::restoreFromTrash(selectedUrls(), this);
+    });
+    m_actRestoreAll = windowAction(tr("Restore all items"), [this] {
+        QList<QUrl> urls;
+        QAbstractItemModel *listing = m_model->model();
+        urls.reserve(listing->rowCount());
+        for (int row = 0; row < listing->rowCount(); ++row) {
+            const KFileItem item = m_model->itemForIndex(listing->index(row, 0));
+            if (!item.isNull())
+                urls.append(item.url());
+        }
+        FileOps::restoreFromTrash(urls, this);
     });
     m_actSelectAll = fileAction(tr("Select all"), [this] {
         m_fileView->selectAll();
@@ -705,6 +747,7 @@ void MainWindow::buildMenuBar()
     file->addAction(m_newFileMenu);
     file->addSeparator();
     file->addAction(m_actOpen);
+    file->addAction(m_actOpenNewWindow);
     file->addAction(m_actOpenWith);
     file->addSeparator();
     file->addAction(m_actCreateLink);
@@ -1380,6 +1423,13 @@ QWidget *MainWindow::buildCommandBar()
     newButton->setMenu(newMenu);
     m_commandLayout->addWidget(newButton);
 
+    // Win7 puts this on the bar itself rather than only inside the New menu
+    auto *newFolder = new Aero::MenuButton(tr("New folder"));
+    newFolder->setShowArrow(false);
+    connect(newFolder, &QToolButton::clicked, this, &MainWindow::createNewFolder);
+    m_commandLayout->addWidget(newFolder);
+    m_newFolderButton = newFolder;
+
     m_commandLayout->addStretch(1);
 
     // Shares the view menu's actions, so the two cannot drift apart
@@ -1446,8 +1496,12 @@ void MainWindow::rebuildContextualCommands()
     const QList<KFileItem> selection = selectedItems();
     if (isTrashView()) {
         if (!selection.isEmpty()) {
-            addButton(tr("Restore this item"), nullptr,
-                      [this] { m_actRestore->trigger(); });
+            addButton(selection.size() == 1 ? tr("Restore this item")
+                                            : tr("Restore the selected items"),
+                      nullptr, [this] { m_actRestore->trigger(); });
+        } else if (m_model->rowCount() > 0) {
+            addButton(tr("Restore all items"), nullptr,
+                      [this] { m_actRestoreAll->trigger(); });
         }
         addButton(tr("Empty the Recycle Bin"), nullptr,
                   [this] { m_actEmptyTrash->trigger(); });
@@ -1631,9 +1685,15 @@ QWidget *MainWindow::buildBody()
 
     m_fileView = new FileView(m_model);
     connect(m_fileView, &FileView::activated, this, &MainWindow::activateIndex);
+    connect(m_fileView, &FileView::middleClicked, this, [this](const QModelIndex &index) {
+        const KFileItem item = m_model->itemForIndex(index);
+        if (!item.isNull())
+            openInNewWindow({item});
+    });
     connect(m_fileView, &FileView::contextMenuRequested,
             this, &MainWindow::showContextMenu);
     connect(m_fileView, &FileView::selectionChanged, this, [this] {
+        invalidateSelection();
         updateDetailsPane();
         updateActionStates();
         rebuildContextualCommands();
@@ -1807,6 +1867,8 @@ QUrl MainWindow::operationFolder() const
 
 void MainWindow::showLocation(const QUrl &url)
 {
+    invalidateSelection();
+
     if (Locations::isComputer(url)) {
         // Never handed to KIO, there being no worker, and this page is built
         // in process and always ready so a pending placeholder is cancelled
@@ -2173,9 +2235,13 @@ void MainWindow::updateFreeSpace()
     m_freeSpaceUrl = folder;
     m_freeSpace.clear();
 
+    if (m_freeSpaceJob)
+        m_freeSpaceJob->kill();
+
     // Through a job rather than a direct query, which blocks on an unresponsive
     // mount and would freeze the window on every cleared selection
     KIO::FileSystemFreeSpaceJob *job = KIO::fileSystemFreeSpace(folder);
+    m_freeSpaceJob = job;
     connect(job, &KJob::result, this, [this, job, folder] {
         if (job->error() || folder != m_freeSpaceUrl)
             return;   // navigated away while the job was running
@@ -2216,7 +2282,14 @@ void MainWindow::updateActionStates()
     // stand down
     const bool readOnly = Archives::isInsideArchive(folder);
 
+    // Only what can be browsed, a file having no window of its own to open in
+    const bool anyBrowsable = std::any_of(selection.cbegin(), selection.cend(),
+                                          [](const KFileItem &item) {
+        return item.isDir() || Archives::urlFor(item).isValid();
+    });
+
     m_actOpen->setEnabled(any);
+    m_actOpenNewWindow->setEnabled(anyBrowsable && !trash);
     m_actOpenWith->setEnabled(any && !trash);
     m_actCut->setEnabled(any && !trash);
     m_actCopy->setEnabled(any && !trash);
@@ -2228,9 +2301,13 @@ void MainWindow::updateActionStates()
     // Win7 renames a whole selection at once, so this is not a single item
     m_actRename->setEnabled(any && !trash && !readOnly);
     m_newFileMenu->setEnabled(!computer && !trash && !readOnly);
+    if (m_newFolderButton)
+        m_newFolderButton->setEnabled(!computer && !trash && !readOnly);
     m_actProperties->setEnabled(!computer);
     m_actRestore->setEnabled(any && trash);
     m_actRestore->setVisible(trash);
+    m_actRestoreAll->setEnabled(trash && m_model->rowCount() > 0);
+    m_actRestoreAll->setVisible(trash);
     m_actEmptyTrash->setEnabled(trash || !computer);
     m_actSelectAll->setEnabled(!computer);
     m_actInvertSelection->setEnabled(!computer);
@@ -2270,6 +2347,21 @@ void MainWindow::activateIndex(const QModelIndex &index)
     if (item.isNull())
         return;
     openItems({item});
+}
+
+void MainWindow::openInNewWindow(const QList<KFileItem> &items)
+{
+    // Only the things this application can browse, a file having no window of
+    // its own to open in
+    for (const KFileItem &item : items) {
+        if (item.isDir()) {
+            openNewWindow(item.url());
+            continue;
+        }
+        const QUrl archive = Archives::urlFor(item);
+        if (archive.isValid())
+            openNewWindow(archive);
+    }
 }
 
 void MainWindow::openItems(const QList<KFileItem> &items)
@@ -2437,6 +2529,8 @@ void MainWindow::buildItemContextMenu(QMenu &menu,
                                       const QList<KFileItem> &selection)
 {
     menu.addAction(m_actOpen);
+    if (m_actOpenNewWindow->isEnabled() && !isTrashView())
+        menu.addAction(m_actOpenNewWindow);
     if (std::any_of(selection.cbegin(), selection.cend(),
                     [](const KFileItem &item) { return !item.isDir(); })) {
         // Also where installed service menus come from
@@ -2528,6 +2622,7 @@ void MainWindow::buildFolderContextMenu(QMenu &menu)
 
     if (isTrashView()) {
         menu.addSeparator();
+        menu.addAction(m_actRestoreAll);
         menu.addAction(m_actEmptyTrash);
     }
 
@@ -2752,11 +2847,22 @@ void MainWindow::createNewFolder()
 
 QList<KFileItem> MainWindow::selectedItems() const
 {
+    if (m_selectionValid)
+        return m_selection;
+
     // The drives page has devices for rows, and its indices bear no relation to
     // the directory model's
-    if (!m_fileView || isComputerView())
-        return {};
-    return m_model->itemsForIndexes(m_fileView->selectedIndexes());
+    m_selection = (!m_fileView || isComputerView())
+        ? QList<KFileItem>()
+        : m_model->itemsForIndexes(m_fileView->selectedIndexes());
+    m_selectionValid = true;
+    return m_selection;
+}
+
+void MainWindow::invalidateSelection()
+{
+    m_selectionValid = false;
+    m_selection.clear();
 }
 
 QList<QUrl> MainWindow::selectedUrls() const

@@ -18,6 +18,7 @@
 #include <QInputDialog>
 #include <QMenu>
 #include <QMimeData>
+#include <QMouseEvent>
 #include <QStandardPaths>
 #include <QTreeWidget>
 #include <QVBoxLayout>
@@ -223,7 +224,27 @@ KFilePlacesModel *NavigationPane::placesModel() const
 
 void NavigationPane::refresh()
 {
+    // Forced, since the labels can change without any of the model moving
+    m_placesSignature.clear();
     rebuild();
+}
+
+QStringList NavigationPane::placesSignature() const
+{
+    QStringList signature;
+    signature.reserve(m_places->rowCount());
+    for (int row = 0; row < m_places->rowCount(); ++row) {
+        const QModelIndex index = m_places->index(row, 0);
+        // The model's own label rather than the drive one, which asks Solid and
+        // is far too expensive to run on every data change
+        signature << QStringLiteral("%1|%2|%3|%4|%5")
+                         .arg(m_places->url(index).toString(),
+                              m_places->text(index),
+                              QString::number(int(m_places->groupType(index))),
+                              QString::number(m_places->isHidden(index)),
+                              QString::number(m_places->setupNeeded(index)));
+    }
+    return signature;
 }
 
 QUrl NavigationPane::urlForItem(QTreeWidgetItem *item) const
@@ -343,8 +364,10 @@ void NavigationPane::applyChildren(const QUrl &url, const QList<QUrl> &children)
             child->setExpanded(true);
     }
 
-    if (url.isLocalFile() && !m_watch->contains(url.toLocalFile()))
+    if (url.isLocalFile() && !m_watched.contains(url.toLocalFile())) {
+        m_watched.insert(url.toLocalFile());
         m_watch->addDir(url.toLocalFile());
+    }
 
     // The new rows may include the next step towards the current folder
     syncHighlight();
@@ -352,6 +375,17 @@ void NavigationPane::applyChildren(const QUrl &url, const QList<QUrl> &children)
 
 void NavigationPane::rebuild()
 {
+    const QStringList signature = placesSignature();
+    if (signature == m_placesSignature && m_tree->topLevelItemCount() > 0)
+        return;
+    m_placesSignature = signature;
+
+    // The tree about to be discarded is what these were taken out for, and
+    // leaving them behind accumulates an inotify watch per folder ever opened
+    for (const QString &path : std::as_const(m_watched))
+        m_watch->removeDir(path);
+    m_watched.clear();
+
     m_tree->clear();
 
     QTreeWidgetItem *favorites = addGroup(tr("Favorites"), {"favorites", "bookmarks", "starred"});
@@ -589,6 +623,15 @@ bool NavigationPane::eventFilter(QObject *watched, QEvent *event)
     };
 
     switch (event->type()) {
+    case QEvent::MouseButtonPress: {
+        auto *e = static_cast<QMouseEvent *>(event);
+        if (e->button() != Qt::MiddleButton)
+            break;
+        const QUrl url = urlForItem(m_tree->itemAt(e->position().toPoint()));
+        if (url.isValid() && !Locations::isComputer(url))
+            Q_EMIT newWindowRequested(url);
+        return true;
+    }
     case QEvent::DragEnter: {
         auto *e = static_cast<QDragEnterEvent *>(event);
         if (e->mimeData()->hasUrls()) {

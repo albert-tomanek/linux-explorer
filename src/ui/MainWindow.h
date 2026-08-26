@@ -6,6 +6,7 @@
 #include <QList>
 #include <QMainWindow>
 #include <QPair>
+#include <QPointer>
 #include <QSoundEffect>
 #include <QUrl>
 
@@ -17,6 +18,7 @@ class DetailsPane;
 class DirectoryModel;
 class FileView;
 class KFileItemActions;
+class KJob;
 class KNewFileMenu;
 class NavigationPane;
 class PreviewPane;
@@ -60,6 +62,10 @@ public:
 
     // A reveal request usually arrives while the folder is still being read
     void selectOnArrival(const QList<QUrl> &urls);
+
+    // Separates the browser windows from every dialog, so a decoration theme's
+    // exception can name one without catching the other
+    void setVisible(bool visible) override;
 
 protected:
     // Watches the whole application, so the mouse side buttons work wherever
@@ -158,6 +164,9 @@ private:
 
     void activateIndex(const QModelIndex &index);
     void openItems(const QList<KFileItem> &items);
+
+    // Folders and archives only, which is what Win7 offers the command on
+    void openInNewWindow(const QList<KFileItem> &items);
     // The flag decides which of the two menus below is shown
     void showContextMenu(const QPoint &globalPos, bool onItem);
     void showComputerContextMenu(const QUrl &url, const QPoint &globalPos);
@@ -221,7 +230,11 @@ private:
     // Scrolling up steps towards the larger icons
     void zoomViewMode(int angleDelta);
 
+    // Cached, since one selection change asks four separate handlers for it and
+    // a rubber band drag reports a change per mouse move
     QList<KFileItem> selectedItems() const;
+    void invalidateSelection();
+
     QList<QUrl> selectedUrls() const;
     QUrl currentUrl() const;
 
@@ -307,6 +320,7 @@ private:
     // Created once and shared by every menu and the command bar, so they cannot
     // disagree about a command's name or enabled state
     QAction *m_actOpen = nullptr;
+    QAction *m_actOpenNewWindow = nullptr;
     QAction *m_actOpenWith = nullptr;
     QAction *m_actCut = nullptr;
     QAction *m_actCopy = nullptr;
@@ -322,6 +336,7 @@ private:
     QAction *m_actInvertSelection = nullptr;
     QAction *m_actRefresh = nullptr;
     QAction *m_actRestore = nullptr;
+    QAction *m_actRestoreAll = nullptr;
     QAction *m_actEmptyTrash = nullptr;
     QAction *m_actOpenTerminal = nullptr;
     QAction *m_actShowHidden = nullptr;
@@ -336,6 +351,8 @@ private:
     QAction *m_actOptions = nullptr;
     QAction *m_actOpenAsAdmin = nullptr;
     QAction *m_actUseCheckBoxes = nullptr;
+
+    QWidget *m_newFolderButton = nullptr;
 
     QActionGroup *m_viewModeGroup = nullptr;
     QActionGroup *m_sortGroup = nullptr;
@@ -370,9 +387,16 @@ private:
     QString m_freeSpace;
     QUrl    m_freeSpaceUrl;
 
+    // Navigating away abandons the query rather than leaving it running against
+    // a mount that may never answer
+    QPointer<KJob> m_freeSpaceJob;
+
     // Mutable so the check can stay a const query
     mutable QUrl m_writableUrl;
     mutable bool m_writable = true;
+
+    mutable QList<KFileItem> m_selection;
+    mutable bool m_selectionValid = false;
 
     QList<QUrl> m_history;
     int         m_historyIndex = -1;

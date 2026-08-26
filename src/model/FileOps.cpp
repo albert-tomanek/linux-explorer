@@ -26,6 +26,7 @@
 #include <QApplication>
 #include <QClipboard>
 #include <QMimeData>
+#include <QPair>
 #include <QProcess>
 #include <QStandardPaths>
 #include <QStringList>
@@ -118,6 +119,9 @@ void confirmThen(const QList<QUrl> &urls, QWidget *window,
                            KIO::AskUserActionInterface::DefaultConfirmation, window);
 }
 
+bool s_pasteValid = false;
+bool s_pasteAvailable = false;
+
 // Resolved to a real path where one exists, which is what applications that
 // cannot speak KIO paste
 void putOnClipboard(const QList<KFileItem> &items, bool cut)
@@ -138,6 +142,10 @@ void putOnClipboard(const QList<KFileItem> &items, bool cut)
     KUrlMimeData::setUrls(urls, mostLocalUrls, mimeData);
     KIO::setClipboardDataCut(mimeData, cut);
     QApplication::clipboard()->setMimeData(mimeData);
+
+    // Directly as well as through the clipboard's own signal, so our own cut or
+    // copy enables Paste even where the platform does not report it back to us
+    s_pasteValid = false;
 }
 
 } // namespace
@@ -223,10 +231,12 @@ void emptyTrash(QWidget *window)
     });
 }
 
-void rename(const QUrl &url, const QString &newName, QWidget *window)
+namespace {
+
+KIO::CopyJob *startRename(const QUrl &url, const QString &newName, QWidget *window)
 {
     if (newName.isEmpty() || newName == url.fileName())
-        return;
+        return nullptr;
 
     QUrl target = url.adjusted(QUrl::RemoveFilename);
     target.setPath(target.path() + newName);
@@ -236,6 +246,36 @@ void rename(const QUrl &url, const QString &newName, QWidget *window)
     reportFailures(job, window, translate("Error Renaming File or Folder"),
                    translate("Cannot rename %1.").arg(nameOf(url)));
     KIO::FileUndoManager::self()->recordCopyJob(job);
+    return job;
+}
+
+// One at a time, since firing them together races several jobs at overlapping
+// target names and stacks their overwrite prompts on top of each other
+void renameChain(QList<QPair<QUrl, QString>> steps, QWidget *window)
+{
+    while (!steps.isEmpty()) {
+        const QPair<QUrl, QString> step = steps.takeFirst();
+        KIO::CopyJob *job = startRename(step.first, step.second, window);
+        if (!job)
+            continue;
+
+        QObject *context = window ? static_cast<QObject *>(window)
+                                  : static_cast<QObject *>(job);
+        QObject::connect(job, &KJob::result, context,
+                         [steps, window](KJob *finished) {
+            if (finished->error() == KIO::ERR_USER_CANCELED)
+                return;
+            renameChain(steps, window);
+        });
+        return;
+    }
+}
+
+} // namespace
+
+void rename(const QUrl &url, const QString &newName, QWidget *window)
+{
+    startRename(url, newName, window);
 }
 
 void renameBatch(const QList<KFileItem> &items, const QString &baseName,
@@ -261,17 +301,19 @@ void renameBatch(const QList<KFileItem> &items, const QString &baseName,
     }
 
     // Windows numbers from one, before the extension
+    QList<QPair<QUrl, QString>> steps;
+    steps.reserve(items.size());
     int counter = 1;
     for (const KFileItem &item : items) {
         const QString name = item.name();
         const int dot = name.lastIndexOf(QLatin1Char('.'));
         const QString suffix = (dot > 0 && !item.isDir()) ? name.mid(dot) : QString();
-        rename(item.url(), QStringLiteral("%1 (%2)%3")
-                               .arg(stem)
-                               .arg(counter++)
-                               .arg(suffix),
-               window);
+        steps.append({item.url(), QStringLiteral("%1 (%2)%3")
+                                      .arg(stem)
+                                      .arg(counter++)
+                                      .arg(suffix)});
     }
+    renameChain(steps, window);
 }
 
 void extractArchive(const QUrl &archiveUrl, const QUrl &destination,
@@ -369,8 +411,22 @@ void cutToClipboard(const QList<KFileItem> &items)
 
 bool canPaste()
 {
-    const QMimeData *mimeData = QApplication::clipboard()->mimeData();
-    return mimeData && KIO::canPasteMimeData(mimeData);
+    // Reading the clipboard is a blocking round trip to whichever application
+    // owns it, and this is asked on every selection change, so the answer is
+    // kept until the clipboard says it changed
+    static bool watching = false;
+    if (!watching) {
+        watching = true;
+        QObject::connect(QApplication::clipboard(), &QClipboard::dataChanged,
+                         qApp, [] { s_pasteValid = false; });
+    }
+
+    if (!s_pasteValid) {
+        const QMimeData *mimeData = QApplication::clipboard()->mimeData();
+        s_pasteAvailable = mimeData && KIO::canPasteMimeData(mimeData);
+        s_pasteValid = true;
+    }
+    return s_pasteAvailable;
 }
 
 void pasteFromClipboard(const QUrl &destination, QWidget *window)

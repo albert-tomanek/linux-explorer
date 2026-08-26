@@ -50,6 +50,18 @@ PreviewPane::PreviewPane(QWidget *parent)
     showPlaceholder(tr("Select a file to preview."));
 }
 
+PreviewPane::~PreviewPane()
+{
+    cancelPreview();
+}
+
+void PreviewPane::cancelPreview()
+{
+    if (m_job)
+        m_job->kill();
+    m_job = nullptr;
+}
+
 void PreviewPane::showPlaceholder(const QString &text)
 {
     m_image->setPixmap(QPixmap());
@@ -59,6 +71,8 @@ void PreviewPane::showPlaceholder(const QString &text)
 
 void PreviewPane::setItems(const QList<KFileItem> &items)
 {
+    cancelPreview();
+
     if (items.isEmpty()) {
         m_pending.clear();
         showPlaceholder(tr("Select a file to preview."));
@@ -84,6 +98,7 @@ void PreviewPane::setItems(const QList<KFileItem> &items)
 
     KIO::PreviewJob *job = new KIO::PreviewJob(
         KFileItemList({item}), QSize(kPreviewSize, kPreviewSize));
+    m_job = job;
     job->setIgnoreMaximumSize(false);
     job->setScaleType(KIO::PreviewJob::ScaledAndCached);
 

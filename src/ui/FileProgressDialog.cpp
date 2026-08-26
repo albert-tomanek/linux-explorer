@@ -6,6 +6,7 @@
 #include <KIO/Global>
 #include <KJob>
 
+#include <QCloseEvent>
 #include <QGridLayout>
 #include <QHBoxLayout>
 #include <QLabel>
@@ -106,10 +107,24 @@ FileProgressDialog::FileProgressDialog(KJob *job, const QString &source,
     Aero::setPointSize(m_expander, 9);
     addFooterWidget(m_expander);
 
+    m_pause = addButton(tr("Pause"));
     auto *cancel = addButton(tr("Cancel"));
 
     connect(m_chevron, &QToolButton::toggled, this, &FileProgressDialog::setExpanded);
     connect(m_expander, &Aero::LinkLabel::clicked, m_chevron, &QToolButton::toggle);
+
+    // Both report whether the job supports being held, so a worker that cannot
+    // be stops offering it rather than showing a button that lies
+    connect(m_pause, &QPushButton::clicked, this, [this] {
+        if (!m_job)
+            return;
+        if (!(m_job->isSuspended() ? m_job->resume() : m_job->suspend())) {
+            m_pause->setEnabled(false);
+            return;
+        }
+        m_pause->setText(m_job->isSuspended() ? tr("Resume") : tr("Pause"));
+        refreshHeading();
+    });
 
     // Cancel asks the job to stop and lets it report back, killing it quietly
     // saying nothing about a half finished operation
@@ -170,6 +185,8 @@ FileProgressDialog::FileProgressDialog(KJob *job, const QString &source,
     // A result means finished either way, errors being the delegate's to report
     connect(job, &KJob::result, this, [this](KJob *) {
         m_job = nullptr;
+        if (m_closing)
+            return;   // the close is already in flight and did the killing
         if (isVisible())
             close();
         else
@@ -186,6 +203,16 @@ FileProgressDialog::FileProgressDialog(KJob *job, const QString &source,
     setFixedWidth(kDialogWidth);
     refreshHeading();
     refreshDetails();
+}
+
+void FileProgressDialog::closeEvent(QCloseEvent *event)
+{
+    m_closing = true;
+    if (KJob *job = m_job) {
+        m_job = nullptr;
+        job->kill(KJob::EmitResult);
+    }
+    Aero::TaskDialog::closeEvent(event);
 }
 
 QWidget *FileProgressDialog::buildDetails()
@@ -239,8 +266,12 @@ void FileProgressDialog::refreshHeading()
         what = KIO::convertSize(m_totalBytes);
     }
 
-    m_heading->setText(what.isEmpty() ? action : QStringLiteral("%1 %2").arg(action, what));
-    setWindowTitle(m_heading->text());
+    QString heading = what.isEmpty() ? action : QStringLiteral("%1 %2").arg(action, what);
+    if (m_job && m_job->isSuspended())
+        heading = tr("%1 (Paused)").arg(heading);
+
+    m_heading->setText(heading);
+    setWindowTitle(heading);
 
     if (!m_source.isEmpty() && !m_destination.isEmpty()) {
         m_summary->setText(tr("from <b>%1</b> to <b>%2</b>")

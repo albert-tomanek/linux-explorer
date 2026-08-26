@@ -1,5 +1,7 @@
 #include "Settings.h"
 
+#include <atomic>
+
 #include <QSettings>
 #include <QStringList>
 #include <QUrl>
@@ -18,6 +20,40 @@ QString key(const char *name)
 {
     return QStringLiteral("View/") + QLatin1String(name);
 }
+
+// Constructing a QSettings costs about 22us, and these are read from the sort
+// comparator and from every painted cell, so the value is held in memory and
+// the setter is the only thing that can move it
+struct BoolSetting {
+    const char *name;
+    bool fallback;
+    std::atomic<signed char> cached{-1};
+
+    bool get()
+    {
+        signed char value = cached.load(std::memory_order_relaxed);
+        if (value < 0) {
+            value = QSettings().value(key(name), fallback).toBool() ? 1 : 0;
+            cached.store(value, std::memory_order_relaxed);
+        }
+        return value == 1;
+    }
+
+    void set(bool on)
+    {
+        QSettings().setValue(key(name), on);
+        cached.store(on ? 1 : 0, std::memory_order_relaxed);
+    }
+};
+
+BoolSetting s_showHiddenFiles{"ShowHiddenFiles", false};
+BoolSetting s_hideKnownExtensions{"HideKnownExtensions", false};
+BoolSetting s_useCheckBoxes{"UseCheckBoxes", false};
+BoolSetting s_alwaysShowMenus{"AlwaysShowMenus", false};
+BoolSetting s_browseInNewWindow{"BrowseInNewWindow", false};
+BoolSetting s_singleClickToOpen{"SingleClickToOpen", false};
+BoolSetting s_searchFileContents{"SearchFileContents", false};
+BoolSetting s_searchSubfolders{"SearchSubfolders", true};
 
 // QSettings treats a slash as a group separator, so paths are percent encoded
 QString folderKey(const QUrl &url)
@@ -79,85 +115,29 @@ void setHeaderState(const QByteArray &state)
     QSettings().setValue(key("HeaderState"), state);
 }
 
-bool showHiddenFiles()
-{
-    return QSettings().value(key("ShowHiddenFiles"), false).toBool();
-}
+bool showHiddenFiles()          { return s_showHiddenFiles.get(); }
+void setShowHiddenFiles(bool show)      { s_showHiddenFiles.set(show); }
 
-void setShowHiddenFiles(bool show)
-{
-    QSettings().setValue(key("ShowHiddenFiles"), show);
-}
+bool hideKnownExtensions()      { return s_hideKnownExtensions.get(); }
+void setHideKnownExtensions(bool hide)  { s_hideKnownExtensions.set(hide); }
 
-bool hideKnownExtensions()
-{
-    return QSettings().value(key("HideKnownExtensions"), false).toBool();
-}
+bool useCheckBoxes()            { return s_useCheckBoxes.get(); }
+void setUseCheckBoxes(bool use)         { s_useCheckBoxes.set(use); }
 
-void setHideKnownExtensions(bool hide)
-{
-    QSettings().setValue(key("HideKnownExtensions"), hide);
-}
+bool alwaysShowMenus()          { return s_alwaysShowMenus.get(); }
+void setAlwaysShowMenus(bool show)      { s_alwaysShowMenus.set(show); }
 
-bool useCheckBoxes()
-{
-    return QSettings().value(key("UseCheckBoxes"), false).toBool();
-}
+bool browseInNewWindow()        { return s_browseInNewWindow.get(); }
+void setBrowseInNewWindow(bool separate) { s_browseInNewWindow.set(separate); }
 
-void setUseCheckBoxes(bool use)
-{
-    QSettings().setValue(key("UseCheckBoxes"), use);
-}
+bool singleClickToOpen()        { return s_singleClickToOpen.get(); }
+void setSingleClickToOpen(bool single)  { s_singleClickToOpen.set(single); }
 
-bool alwaysShowMenus()
-{
-    return QSettings().value(key("AlwaysShowMenus"), false).toBool();
-}
+bool searchFileContents()       { return s_searchFileContents.get(); }
+void setSearchFileContents(bool contents) { s_searchFileContents.set(contents); }
 
-void setAlwaysShowMenus(bool show)
-{
-    QSettings().setValue(key("AlwaysShowMenus"), show);
-}
-
-bool browseInNewWindow()
-{
-    return QSettings().value(key("BrowseInNewWindow"), false).toBool();
-}
-
-void setBrowseInNewWindow(bool separate)
-{
-    QSettings().setValue(key("BrowseInNewWindow"), separate);
-}
-
-bool singleClickToOpen()
-{
-    return QSettings().value(key("SingleClickToOpen"), false).toBool();
-}
-
-void setSingleClickToOpen(bool single)
-{
-    QSettings().setValue(key("SingleClickToOpen"), single);
-}
-
-bool searchFileContents()
-{
-    return QSettings().value(key("SearchFileContents"), false).toBool();
-}
-
-void setSearchFileContents(bool contents)
-{
-    QSettings().setValue(key("SearchFileContents"), contents);
-}
-
-bool searchSubfolders()
-{
-    return QSettings().value(key("SearchSubfolders"), true).toBool();
-}
-
-void setSearchSubfolders(bool recursive)
-{
-    QSettings().setValue(key("SearchSubfolders"), recursive);
-}
+bool searchSubfolders()         { return s_searchSubfolders.get(); }
+void setSearchSubfolders(bool recursive) { s_searchSubfolders.set(recursive); }
 
 void clearRememberedViewModes()
 {

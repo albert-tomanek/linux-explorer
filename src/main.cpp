@@ -119,6 +119,13 @@ int main(int argc, char *argv[]) {
     app.setOrganizationName("explorer");
     app.setApplicationName("explorer");
     app.setApplicationVersion(QStringLiteral("0.1"));
+
+    // A decoration theme's exception list matches on the window class, which on
+    // Wayland is the app id and is read from this as each window is created.
+    // The browser windows claim the plain name for themselves, so everything
+    // else lands here, dialogs raised by KIO and the desktop included, and an
+    // exception written to strip a browser window's caption leaves them alone
+    app.setDesktopFileName(QStringLiteral("explorer-dialog"));
     // No display name is set, Qt appending one to every title where Explorer's
     // is just the folder name
     app.setWindowIcon(Aero::themeIcon({"system-file-manager", "folder"}));

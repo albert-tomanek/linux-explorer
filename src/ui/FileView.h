@@ -84,6 +84,7 @@ public:
 Q_SIGNALS:
     // The index is into the flat listing, never the grouping proxy
     void activated(const QModelIndex &index);
+    void middleClicked(const QModelIndex &index);
     // The flag separates a click on a row from one on empty space
     void contextMenuRequested(const QPoint &globalPos, bool onItem);
     void selectionChanged();

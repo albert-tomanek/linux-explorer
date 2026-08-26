@@ -22,6 +22,11 @@ public:
     FileProgressDialog(KJob *job, const QString &source, const QString &destination,
                        QWidget *parent = nullptr);
 
+protected:
+    // Closing the window stops the operation, since the jobs hide their progress
+    // from the desktop's tracker and would otherwise carry on unreachable
+    void closeEvent(QCloseEvent *event) override;
+
 private:
     QWidget *buildDetails();
     void setExpanded(bool expanded);
@@ -32,6 +37,8 @@ private:
     QString remainingText() const;
 
     KJob *m_job = nullptr;
+    QPushButton *m_pause = nullptr;
+    bool m_closing = false;
 
     QLabel *m_heading = nullptr;
     QLabel *m_summary = nullptr;
