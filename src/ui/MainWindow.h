@@ -31,7 +31,7 @@ class QStackedWidget;
 class QTimer;
 class QHBoxLayout;
 class QLabel;
-namespace Aero { class NotificationStrip; }
+namespace Aero { class NotifyStrip; }
 class QLineEdit;
 class QProgressBar;
 class QPropertyAnimation;
@@ -261,7 +261,8 @@ private:
 
     // In the window rather than the Computer page, so it spans the navigation
     // pane too, and what it carries is decided in one place
-    Aero::NotificationStrip *m_notification = nullptr;
+    Aero::NotifyStrip *m_notification = nullptr;
+    QAction *m_notificationAction = nullptr;
 
     // Dismissing hides it for the session, the drive list being rebuilt on
     // every device event and a bar that kept coming back being worse than none

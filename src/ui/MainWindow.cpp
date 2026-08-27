@@ -38,6 +38,7 @@
 
 #include <AeroQt/insetwindow.h>
 #include <AeroQt/navbuttons.h>
+#include <AeroQt/notifystrip.h>
 
 #include <QAction>
 #include <QActionGroup>
@@ -1612,18 +1613,20 @@ void MainWindow::searchAgain(bool contents, bool wholeMachine)
 
 QWidget *MainWindow::buildNotificationBar()
 {
-    m_notification = new Aero::NotificationStrip;
+    m_notification = new Aero::NotifyStrip;
+
+    m_notificationAction = new QAction(this);
 
     // The strip carries no policy, only reporting the click, and which dialog
     // that means is decided here
-    connect(m_notification, &Aero::NotificationStrip::clicked, this, [this] {
+    connect(m_notificationAction, &QAction::triggered, this, [this] {
         if (m_notice == Notice::Administrator)
             AccessDialogs::showAdministratorWarning(this);
         else
             showMountDialog();
     });
     // Dismissing hides it for the rest of the session
-    connect(m_notification, &Aero::NotificationStrip::dismissed, this, [this] {
+    connect(m_notification, &Aero::NotifyStrip::dismissed, this, [this] {
         m_notificationDismissed = true;
     });
 
@@ -1657,12 +1660,16 @@ void MainWindow::updateNotification()
 
     // The drives notice can be waved away, where the administrator one stays
     // for as long as it is true
-    m_notification->showMessage(
+    m_notificationAction->setToolTip(
         m_notice == Notice::Administrator
             ? tr("You're navigating as an administrator, be careful. "
                  "Click for information...")
-            : unmountedDrivesNotice(m_computerModel->unmountedCount()),
-        m_notice != Notice::Administrator);
+            : unmountedDrivesNotice(m_computerModel->unmountedCount())
+    );
+    m_notificationAction->setProperty("elevatedPriv", m_notice != Notice::Administrator);
+    m_notification->setAction(m_notificationAction);    // Text only updates if we set the action again
+    m_notification->setDismissable(m_notice != Notice::Administrator);
+    m_notification->show();
 }
 
 // Windows counts the drives it found rather than saying some
