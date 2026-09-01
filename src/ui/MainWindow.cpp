@@ -35,6 +35,7 @@
 #include <KNewFileMenu>
 #include <KProtocolInfo>
 #include <KWindowSystem>
+#include <KMessageWidget>
 
 #include <AeroQt/insetwindow.h>
 #include <AeroQt/navbuttons.h>
@@ -1613,20 +1614,19 @@ void MainWindow::searchAgain(bool contents, bool wholeMachine)
 
 QWidget *MainWindow::buildNotificationBar()
 {
-    m_notification = new Aero::NotifyStrip;
-
-    m_notificationAction = new QAction(this);
+    m_notification = new KMessageWidget;
+    m_notification->setPosition(KMessageWidget::Header);
 
     // The strip carries no policy, only reporting the click, and which dialog
     // that means is decided here
-    connect(m_notificationAction, &QAction::triggered, this, [this] {
-        if (m_notice == Notice::Administrator)
+    connect(m_notification, &KMessageWidget::linkActivated, this, [=](const QString &contents) {
+        if (contents == "admin-warning")
             AccessDialogs::showAdministratorWarning(this);
-        else
+        if (contents == "mount-dlg")
             showMountDialog();
     });
     // Dismissing hides it for the rest of the session
-    connect(m_notification, &Aero::NotifyStrip::dismissed, this, [this] {
+    connect(m_notification, &KMessageWidget::hideAnimationFinished, this, [this] {
         m_notificationDismissed = true;
     });
 
@@ -1654,22 +1654,20 @@ void MainWindow::updateNotification()
 
     m_notice = pendingNotice();
     if (m_notice == Notice::None) {
-        m_notification->clear();
+        m_notification->clearActions();
         return;
     }
 
     // The drives notice can be waved away, where the administrator one stays
     // for as long as it is true
-    m_notificationAction->setToolTip(
+    m_notification->setText(
         m_notice == Notice::Administrator
             ? tr("You're navigating as an administrator, be careful. "
-                 "Click for information...")
+                 "<a href=\"admin-warning\">Click for information...</a>")
             : unmountedDrivesNotice(m_computerModel->unmountedCount())
     );
-    m_notificationAction->setProperty("elevatedPriv", m_notice != Notice::Administrator);
-    m_notification->setAction(m_notificationAction);    // Text only updates if we set the action again
-    m_notification->setDismissable(m_notice != Notice::Administrator);
-    m_notification->show();
+    m_notification->setCloseButtonVisible(m_notice != Notice::Administrator);
+    m_notification->animatedShow();
 }
 
 // Windows counts the drives it found rather than saying some
@@ -1677,9 +1675,9 @@ QString MainWindow::unmountedDrivesNotice(int hidden)
 {
     return hidden == 1
         ? tr("A drive is connected to your computer but is not mounted. "
-             "Click to change...")
+             "<a href=\"mount-dlg\">Click to change...</a>")
         : tr("%1 drives are connected to your computer but are not mounted. "
-             "Click to change...").arg(hidden);
+             "<a href=\"mount-dlg\">Click to change...</a>").arg(hidden);
 }
 
 QWidget *MainWindow::buildBody()

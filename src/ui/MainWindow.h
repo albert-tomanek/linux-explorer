@@ -20,6 +20,7 @@ class FileView;
 class KFileItemActions;
 class KJob;
 class KNewFileMenu;
+class KMessageWidget;
 class NavigationPane;
 class PreviewPane;
 class QAction;
@@ -261,8 +262,7 @@ private:
 
     // In the window rather than the Computer page, so it spans the navigation
     // pane too, and what it carries is decided in one place
-    Aero::NotifyStrip *m_notification = nullptr;
-    QAction *m_notificationAction = nullptr;
+    KMessageWidget *m_notification = nullptr;
 
     // Dismissing hides it for the session, the drive list being rebuilt on
     // every device event and a bar that kept coming back being worse than none
