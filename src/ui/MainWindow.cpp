@@ -1616,6 +1616,7 @@ QWidget *MainWindow::buildNotificationBar()
 {
     m_notification = new KMessageWidget;
     m_notification->setPosition(KMessageWidget::Header);
+    m_notification->hide();
 
     // The strip carries no policy, only reporting the click, and which dialog
     // that means is decided here
